@@ -2338,6 +2338,19 @@ function renderWheelSection(){
   sec.classList.toggle('hidden', !show);
   if(show) document.getElementById('wheelSecPrice').textContent = `₭ ${fmtK(cfg.price)}`;
 }
+function _wheelFiller(pool, n, fixed){
+  // fixed: {index: item}. Everything else cycles through ALL prizes in shuffled order, no neighbours repeated
+  const out = []; let bag = [];
+  const refill = ()=>{ bag = pool.slice(); for(let i=bag.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [bag[i],bag[j]]=[bag[j],bag[i]]; } };
+  for(let i=0;i<n;i++){
+    if(fixed && fixed[i]){ out.push(fixed[i]); continue; }
+    if(!bag.length) refill();
+    let x = bag.pop();
+    if(pool.length>1 && out.length && out[out.length-1]===x){ if(!bag.length) refill(); const y = bag.pop(); bag.unshift(x); x = y; }
+    out.push(x);
+  }
+  return out;
+}
 function _wheelCard(x, win){
   const img = (x.p.images && x.p.images[0]) || '';
   return `<div class="wheel-card ${win?'win':''}"><img src="${img}" alt=""><span>${escapeHtml(x.p.name)}</span></div>`;
@@ -2345,8 +2358,7 @@ function _wheelCard(x, win){
 function _wheelCenter(i, jitter){ const vw = document.getElementById('wheelViewport').clientWidth; return vw/2 - (i*(WHEEL_W+WHEEL_G) + WHEEL_W/2 + (jitter||0)); }
 function _wheelRenderIdle(pool){
   const strip = document.getElementById('wheelStrip');
-  const first = _wheelLast || pool[0];
-  const cards = [first]; for(let i=1;i<14;i++) cards.push(pool[Math.floor(Math.random()*pool.length)]);
+  const cards = _wheelFiller(pool, Math.max(14, pool.length*2), _wheelLast?{0:_wheelLast}:null);
   strip.style.transition = 'none';
   strip.innerHTML = cards.map(x=>_wheelCard(x)).join('');
   strip.style.transform = `translateX(${_wheelCenter(0)}px)`;
@@ -2422,8 +2434,8 @@ async function wheelSpin(){
     renderAuthArea();
     // ---- animation: strip slides right -> left, stops with the prize under the red line ----
     const WIN_I = 48, strip = document.getElementById('wheelStrip');
-    const cards = [_wheelLast || win];
-    for(let i=1;i<60;i++) cards.push(i===WIN_I ? win : pool[Math.floor(Math.random()*pool.length)]);
+    const fx = {}; fx[WIN_I] = win; if(_wheelLast) fx[0] = _wheelLast;
+    const cards = _wheelFiller(pool, 60, fx);
     strip.style.transition = 'none';
     strip.innerHTML = cards.map((x,i)=>_wheelCard(x, false)).join('');
     strip.style.transform = `translateX(${_wheelCenter(0)}px)`;
