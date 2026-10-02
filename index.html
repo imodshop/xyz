@@ -2024,12 +2024,12 @@ async function submitTopup(){
   const slipData = window._topupSlipDataUrl;
   const settings = loadDB(DB_KEYS.settings, {});
   const topups = loadDB(DB_KEYS.topups, []);
-  const topup = { id: uid('top'), userId:user.id, amount:CURRENT_TOPUP_AMOUNT, slip:slipData, status:'pending_verification', createdAt: nowISO(), verifiedAt: null };
+  const topup = { id: uid('top'), userId:user.id, username:user.username, phone:user.phone||'', amount:CURRENT_TOPUP_AMOUNT, slip:slipData, status:'pending_verification', createdAt: nowISO(), verifiedAt: null };
   topups.push(topup); saveDB(DB_KEYS.topups, topups);
   log('TOPUP_SUBMIT', `Topup ${topup.id} ₭${topup.amount} by ${user.username}`);
   const _link = (settings.adminPanelUrl||'').trim().replace(/\/$/,'');
   const _linkLine = _link ? `\n👉 ໜ້າແອັດມິນ: ${_link}/?tab=topups` : '';
-  sendFacebookNotify(`ລູກຄ້າແຈ້ເຕີມເງິນຮ້ານ TOH Shop\n👤 ${user.username}\n💰 ₭${fmtK(topup.amount)}\n⏳ ລໍວถ້າແອັດມິນກວດສົບ${_linkLine}`);
+  sendFacebookNotify(`🔔 ລູກຄ້າແຈ້ງເຕີມເງິນຮ້ານ TOH Shop\n👤 ຊື່ຜູ້ໃຊ້: ${user.username}\n💰 ຈຳນວນເງິນ: ₭${fmtK(topup.amount)}\n📞 ເບີໂທ: ${user.phone||'-'}\n⏳ ລໍຖ້າແອັດມິນກວດສອບ${_linkLine}`);
   window._topupSlipDataUrl = null;
   document.getElementById('topupSlipPreview').classList.add('hidden');
   clearInterval(_countdownInterval);
