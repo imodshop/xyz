@@ -695,6 +695,25 @@ async function _ensureAuth(){
 }
 // PERF: coalesce rapid saves of the same key (e.g. product save + log() + order save)
 // into ONE Firestore write of the latest value, instead of one big write per call.
+// SAFE CLOUD WRITE: never overwrite shop data blindly.
+//  - if the cloud copy can't be read, the write is aborted (no blind overwrite)
+//  - a non-admin device can never shrink existing cloud data to empty / <50%
+//  - before any big shrink (or wipe), the previous cloud copy is saved to shopDataBackup/<key>
+async function _guardedCloudSet(key, val){
+  const ref = fbDb.collection(CLOUD_COLLECTION).doc(key);
+  let old = null;
+  try{ const s = await ref.get(); old = s.exists ? (s.data() && s.data().data) : null; }
+  catch(e){ console.warn('Cloud read before write failed, write aborted for', key, e); return; }
+  const isEmpty = v => v==null || (Array.isArray(v) ? v.length===0 : (typeof v==='object' && Object.keys(v).length===0));
+  const isAdmin = typeof SESSION !== 'undefined' && SESSION && SESSION.role==='admin';
+  if(old!=null && !isEmpty(old)){
+    const a = JSON.stringify(old).length, b = JSON.stringify(val==null?null:val).length;
+    const shrink = isEmpty(val) || b < a*0.5;
+    if(shrink && !isAdmin){ console.warn('Blocked destructive write from non-admin for', key); return; }
+    if(shrink){ try{ await fbDb.collection('shopDataBackup').doc(key).set({ data: old, savedAt: nowISO() }); }catch(e){ console.warn('backup failed', e); } }
+  }
+  await ref.set({ data: val, updatedAt: nowISO() });
+}
 const _syncQueue = {};
 function syncKeyToFirestore(key, val){
   let q = _syncQueue[key];
@@ -710,7 +729,7 @@ function syncKeyToFirestore(key, val){
       try{
         await _ensureAuth();
         if(!fbAuth.currentUser) return;
-        await fbDb.collection(CLOUD_COLLECTION).doc(key).set({ data: q.val, updatedAt: nowISO() });
+        await _guardedCloudSet(key, q.val);
       }catch(e){
         console.warn('Firestore sync failed for', key, e);
         if(SESSION && SESSION.role==='admin' && typeof toastErr === 'function'){
@@ -881,20 +900,22 @@ const CATEGORIES = [
 ];
 
 async function seedIfNeeded(){
+  // LOCAL-ONLY seeding: never push empty defaults to Firestore, otherwise a failed
+  // pull on a fresh browser would overwrite the real shop data in the cloud.
+  const seedLocal = (k, v) => { if(!localStorage.getItem(k)) localStorage.setItem(k, JSON.stringify(v)); };
   let admins = loadDB(DB_KEYS.admins, []);
   if(admins.length === 0){
     const salt = genSalt();
     const hash = await hashPassword('TOH02094357757', salt);
     admins.push({ id: uid('adm'), email: 'toh94357757@gmail.com', phone: '02094357757', passwordHash: hash, salt: salt, role: 'admin', createdAt: nowISO() });
-    saveDB(DB_KEYS.admins, admins);
-    log('SEED', 'Admin account seeded automatically on first install.');
+    localStorage.setItem(DB_KEYS.admins, JSON.stringify(admins));
   }
-  if(loadDB(DB_KEYS.products, []).length === 0) saveDB(DB_KEYS.products, []);
-  if(loadDB(DB_KEYS.users, []).length === 0) saveDB(DB_KEYS.users, []);
-  if(loadDB(DB_KEYS.orders, []).length === 0) saveDB(DB_KEYS.orders, []);
-  if(loadDB(DB_KEYS.logs, []).length === 0) saveDB(DB_KEYS.logs, []);
-  if(loadDB(DB_KEYS.topups, []).length === 0) saveDB(DB_KEYS.topups, []);
-  if(!localStorage.getItem(DB_KEYS.settings)) saveDB(DB_KEYS.settings, { qrImage: null, bgImage: null, heroBannerImage: null, siteLogo: null, siteName: '', promoText: '', promoText2: '' });
+  seedLocal(DB_KEYS.products, []);
+  seedLocal(DB_KEYS.users, []);
+  seedLocal(DB_KEYS.orders, []);
+  seedLocal(DB_KEYS.logs, []);
+  seedLocal(DB_KEYS.topups, []);
+  seedLocal(DB_KEYS.settings, { qrImage: null, bgImage: null, heroBannerImage: null, siteLogo: null, siteName: '', promoText: '', promoText2: '' });
   renderTopupAmountButtons();
 }
 
@@ -908,7 +929,13 @@ const api = {
   async register({username,phone,password}){
     const users = loadDB(DB_KEYS.users, []);
     if(users.some(u=>u.username.toLowerCase()===username.toLowerCase())) throw new Error('ຊື່ຜູ້ໃຊ້ນີ້ຖືກນຳໃຊ້ແລ້ວ');
-    if(users.some(u=>u.phone && normPhone(u.phone)===phone)) throw new Error('ເບີໂທນີ້ສະໝັກແລ້ວ, ກະລຸນາເຂົ້າສູ່ລະບົບ');
+    const _k8 = String(phone).replace(/\D/g,'').slice(-8);   // same number typed as 020xxxxxxxx / 20xxxxxxxx / 85620xxxxxxxx
+    if(users.some(u=>u.phone && String(u.phone).replace(/\D/g,'').slice(-8)===_k8)) throw new Error('ເບີໂທນີ້ສະໝັກແລ້ວ, ກະລຸນາເຂົ້າສູ່ລະບົບ');
+    try{
+      await _ensureAuth();
+      const _pi = await fbDb.collection('phoneIndex').doc(_k8).get();
+      if(_pi.exists) throw new Error('ເບີໂທນີ້ສະໝັກແລ້ວ, ກະລຸນາເຂົ້າສູ່ລະບົບ');
+    }catch(e){ if(e && e.message && e.message.indexOf('ເບີໂທນີ້ສະໝັກແລ້ວ')===0) throw e; }
     const email = phoneToEmail(phone);
     let cred;
     try{
@@ -923,6 +950,7 @@ const api = {
     ], createdAt: nowISO() };
     users.push(user); saveDB(DB_KEYS.users, users);
     await syncUserToFirestore(user, {withBalance:true});
+    try{ await fbDb.collection('phoneIndex').doc(_k8).set({ uid: cred.user.uid, createdAt: nowISO() }); }catch(e){ console.warn('phoneIndex write failed', e); }
     try{ fbDb.collection('shopData').doc('publicStats').set({ users: firebase.firestore.FieldValue.increment(1), updatedAt: nowISO() }, { merge:true }).catch(()=>{}); }catch(e){}
     log('REGISTER', `New user: ${username}`);
     return { token: 'jwt.'+uid('tok'), user };
