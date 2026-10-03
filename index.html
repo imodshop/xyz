@@ -755,7 +755,7 @@ let _pullInFlight = null, _lastPullAt = 0;
 // so callers only re-render when needed. Pass force=true on money-critical paths.
 function pullAdminDataFromFirestore(force){
   if(_pullInFlight) return _pullInFlight;
-  if(!force && Date.now() - _lastPullAt < 4000) return Promise.resolve(false);
+  if(!force && Date.now() - _lastPullAt < 30000) return Promise.resolve(false);   // quota saver: was 4s
   _pullInFlight = (async()=>{
     if(_pendingSyncs.size) await Promise.all([..._pendingSyncs.values()]);
     let changed = false;
@@ -1075,7 +1075,9 @@ function setPmImg(src){
   setTimeout(()=>{ document.getElementById('loadOverlay').style.opacity='0'; setTimeout(()=>document.getElementById('loadOverlay').remove(),400); }, 350);
   setTimeout(()=>{ if(window.showWelcomePopup) window.showWelcomePopup(); }, 500);
   if(SESSION && SESSION.role==='user') refreshOwnUserFromFirestore();
-  setInterval(refreshOwnUserFromFirestore, 15000);
+  // Quota saver: refresh every 60s (was 15s) and only while the tab is visible
+  setInterval(()=>{ if(!document.hidden) refreshOwnUserFromFirestore(); }, 60000);
+  document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) refreshOwnUserFromFirestore(); });
 })();
 
 function route(){
